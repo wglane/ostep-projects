@@ -1,2 +1,2 @@
 wish: wish.c
-	gcc -g -o wish wish.c
+	gcc -Wall -g -o wish wish.c

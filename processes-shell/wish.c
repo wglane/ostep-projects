@@ -5,45 +5,97 @@
 #include <unistd.h>
 #include <string.h>
 
-#define EXIT "exit\n"
+#define EXIT "exit"
+#define PATH "path"
+#define CD "cd"
+#define BIN "/bin/"
+#define USRBIN "/usr/bin/"
 
-void myfprint(FILE *);
 
+void err_routine();
+void prepend_path(char **);
 
 int main(int argc, char *argv[]) {
-
-	// batch
-	if (argc > 1) {
-		FILE *fp; 
-		if ((fp = fopen(argv[1], "r")) == NULL) {
-			fprintf(stderr, "file %s could not be opened\n", argv[1]);
-			exit(1);
-		}	
-		myfprint(fp);
-		fclose(fp);
-		exit(0);
-	}
-
-	// interactive
-	while (true) {
-		printf("wish> ");
-		myfprint(stdin);	
-	}
-	return 0;
-}
-
-
-void myfprint(FILE *fp) {
-	char *linep = NULL;
+	char *line = NULL;
 	size_t linecap = 0;
-	ssize_t linelen;
-	while (true) {
-		linelen = getline(&linep, &linecap, fp);
-		if (linelen < 0 || !strcmp(linep, EXIT)) { 
-			fclose(fp);
-			exit(0);
+	int linelen = 0;
+	FILE *fp = stdin;
+	bool batch = (argc > 1);
+
+	// special case: batch mode
+	if (batch) {
+		fp = fopen(argv[1], "r");
+		if (fp == NULL) {
+			err_routine();
 		}
-		printf("%s(%ld chars, line buffer size %zu)\n", 
-				linep, linelen, linecap);
+	}
+
+	while (true) {
+		if (!batch) printf("wish> ");
+		if ((linelen = getline(&line, &linecap, fp)) < 0) {
+			exit(0);	
+		}
+		// duplicate line to avoid mutating with strsep
+		char *linedup = strdup(line);
+		char *token = strsep(&linedup, "\n");
+
+		// first check for built-ins
+		// TODO call err_routine if args are passed to EXIT
+		if (strcmp(token, EXIT) == 0) {
+			free(line);
+			exit(0);
+		} else if (strcmp(token, CD) == 0) {
+			// TODO
+		} else if (strcmp(token, PATH) == 0) {
+			// TODO
+		}
+
+		// not a built-in command, call from path
+		else {
+			int rc = fork();
+			if (rc < 0) {
+				err_routine();
+			}
+			// child
+			else if (rc == 0) { 	
+				char *args[2];
+				args[0] = (token == '\0') ? NULL : token; 
+				args[1] = NULL;
+				prepend_path(&token);
+				if ((execv(args[0], args)) == -1) {
+					err_routine();
+				}
+			}
+			// parent
+			else {					
+				wait(NULL);
+			}
+		}
+	}
+	free(line);
+	exit(0);
+}
+
+void err_routine() {
+	fprintf(stderr, "An error has occurred\n");
+	exit(1);
+}
+
+void prepend_path(char **tokenp) {
+	char *token = *tokenp;
+	if (token == NULL) {
+		err_routine();
+	}
+	int n = strlen(token);
+	char *prepended = malloc(strlen(BIN) + n + 1);		
+	strcpy(prepended, BIN);
+	strcat(prepended, token);
+	if (access(prepended, X_OK)) {
+		free(token);
+		*tokenp = prepended;
 	}
 }
+
+
+
+
