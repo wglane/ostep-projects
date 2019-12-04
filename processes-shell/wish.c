@@ -8,12 +8,11 @@
 #define EXIT "exit"
 #define PATH "path"
 #define CD "cd"
-#define BIN "/bin/"
 #define USRBIN "/usr/bin/"
+#define BIN "/bin/"
 
-
+int execute(char *);
 void err_routine();
-void prepend_path(char **);
 
 int main(int argc, char *argv[]) {
 	char *line = NULL;
@@ -57,12 +56,8 @@ int main(int argc, char *argv[]) {
 				err_routine();
 			}
 			// child
-			else if (rc == 0) { 	
-				char *args[2];
-				args[0] = (token == '\0') ? NULL : token; 
-				args[1] = NULL;
-				prepend_path(&token);
-				if ((execv(args[0], args)) == -1) {
+			else if (rc == 0) {
+				if ((execute(token) == -1)) {
 					err_routine();
 				}
 			}
@@ -81,19 +76,25 @@ void err_routine() {
 	exit(1);
 }
 
-void prepend_path(char **tokenp) {
-	char *token = *tokenp;
-	if (token == NULL) {
-		err_routine();
-	}
-	int n = strlen(token);
-	char *prepended = malloc(strlen(BIN) + n + 1);		
+int execute(char *cmd) {
+	// make prepended large enough to hold either path
+	int m = strlen(USRBIN);
+	int n = strlen(cmd);
+	char prepended[m + n + 1];
 	strcpy(prepended, BIN);
-	strcat(prepended, token);
-	if (access(prepended, X_OK)) {
-		free(token);
-		*tokenp = prepended;
+	strcpy(prepended + strlen(BIN), cmd);	
+
+	char *args[2];
+	args[1] = NULL;
+	if (access(prepended, X_OK) == 0) {
+		// pass
+	} else {
+		strcpy(prepended, USRBIN);
+		strcpy(prepended + m, cmd);
 	}
+	
+	args[0] = prepended;
+	return execv(args[0], args);
 }
 
 
