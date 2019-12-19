@@ -1,3 +1,4 @@
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,8 +12,9 @@
 
 
 char *prepend(const char *restrict, const char *restrict, const char *);
+char *redirect(char **, size_t); 
 char **tokenize(const char *, const char *, size_t *);
-int execute(char **, char **path);
+int execute(char **, char **path, size_t nargs);
 void cmd_exit(char **, char *, size_t);
 void cmd_cd(char **, size_t);
 void cmd_path(char ***, char **, size_t);
@@ -68,7 +70,7 @@ int main(int argc, char *argv[]) {
 			}
 			// child [DEBUG: parent]
 			else if (rc == 0) {
-				if ((execute(tokens, path) == -1)) {
+				if ((execute(tokens, path, nargs) == -1)) {
 					free_tokens(tokens);
 					err_routine(true);
 				}
@@ -117,7 +119,15 @@ void err_routine(bool call_exit) {
 }
 
 
-int execute(char **args, char **path) {
+int execute(char **args, char **path, size_t nargs) {	
+	// handle redirection
+	char *out;
+	if ((out = redirect(args, nargs)) != NULL) {
+		int fd = open(out, O_WRONLY | O_TRUNC | O_CREAT);
+		// redirect stdin in to file
+		if (fd < 0 || (fd = dup2(fd, STDOUT_FILENO) < 0 )) err_routine(true);
+	}
+
 	for (char **p = path; *p != NULL; ++p) {
 		char *prepended = prepend(args[0], *p, "/");
 		if (access(prepended, X_OK) == 0) {
@@ -133,6 +143,31 @@ int execute(char **args, char **path) {
 }
 
 
+char *redirect(char **args, size_t nargs) {
+	// ensure '>' only allowed if at least two args, and only second to last
+	for (int i = 0; i < nargs; ++i) {
+		if (strcmp(args[i], ">") == 0 && (nargs < 3 || i != nargs - 2)) {
+			err_routine(true);
+		}
+	}	
+	// check that penultimate arg is '>'
+	if (nargs < 3 || strcmp(args[nargs - 2], ">") != 0) {
+		return NULL;
+	}	
+	
+	// remove "> [out]" from args
+	char *out = strdup(args[nargs - 1]);
+	free(args[nargs - 1]);
+	free(args[nargs - 2]);
+	args[nargs - 1] = NULL;
+	args[nargs - 2] = NULL;
+	
+	// output to last arg
+	return out;
+
+}
+
+
 char *prepend(const char *restrict base, const char *restrict prefix,
 		const char *sep) {
 	char *s = malloc(strlen(prefix) + strlen(sep)+ strlen(base) + 1);
@@ -143,7 +178,7 @@ char *prepend(const char *restrict base, const char *restrict prefix,
 	return s;
 }
 
-
+// TODO handle redirect with no whitepsace, e.g. pwd>out 
 char **tokenize(const char *line, const char *delims, size_t *nargs) {
 	// count number of args
 	*nargs = 0;
@@ -153,7 +188,7 @@ char **tokenize(const char *line, const char *delims, size_t *nargs) {
 		p += strspn(p, delims);
 		*nargs += 1;
 	}
-	// tokenize args (final arg must be NULL for execv)
+	// tokenize args 
 	char **tokens = malloc((*nargs + 1) * sizeof(char *));
 	char *token, *tofree, *linedup; 
 	tofree = linedup = strdup(line);
@@ -165,6 +200,7 @@ char **tokenize(const char *line, const char *delims, size_t *nargs) {
 			i++;
 		}
 	} 
+	// final arg must be NULL for execv
 	tokens[i] = NULL;
 	free(tofree);
 
