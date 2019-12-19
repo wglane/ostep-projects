@@ -7,15 +7,12 @@
 #define EXIT "exit"
 #define PATH "path"
 #define CD "cd"
-#define DEFAULT_PATH "/bin"
+#define USRBIN "/usr/bin/"
+#define BIN "/bin/"
 
-
-char *prepend(const char *restrict, const char *restrict, const char *);
+char *prepend(const char *restrict, const char *restrict);
 char **tokenize(const char *, const char *, size_t *);
-int execute(char **, char **path);
-void cmd_exit(char **, char *, size_t);
-void cmd_cd(char **, size_t);
-void cmd_path(char ***, char **, size_t);
+int execute(char **);
 void err_routine(bool);
 void free_tokens(char **);
 
@@ -27,7 +24,7 @@ int main(int argc, char *argv[]) {
 	const char *delims = " \t\n";
 	FILE *fp = stdin;
 	bool batch = (argc > 1);
-
+	
 	// special case: batch mode
 	if (batch) {
 		fp = fopen(argv[1], "r");
@@ -35,31 +32,37 @@ int main(int argc, char *argv[]) {
 			err_routine(true);
 		}
 	}
-
-	size_t nargs;
-	char **path = tokenize(DEFAULT_PATH, delims, &nargs);
+	
 	char **tokens = malloc(0);
 	tokens[0] = NULL;
+	size_t nargs = 0;
 	while (true) {
 		free_tokens(tokens);
 		if (!batch) printf("wish> ");
 		if ((linelen = getline(&line, &linecap, fp)) < 0) {
-			free_tokens(path);
 			exit(0);
 		}	
-
+	
 		tokens = tokenize(line, delims, &nargs);
-		char *cmd = tokens[0]; 
+		char *cmd = tokens[0]; // TODO rename this
 
 		// first check for built-ins
 		if (strcmp(cmd, EXIT) == 0) {
-			cmd_exit(tokens, line, nargs);	
+			if (nargs > 1) {
+				err_routine(false);
+			} else {
+				free_tokens(tokens);
+				free(line);
+				exit(0);
+			}
 		} else if (strcmp(cmd, CD) == 0) {
-			cmd_cd(tokens, nargs);
+			if (nargs != 2 || chdir(tokens[1]) < 0) {
+				err_routine(false);
+			}
 		} else if (strcmp(cmd, PATH) == 0) {
-			cmd_path(&path, tokens, nargs);
+			// TODO
 		}
-			
+
 		// not a built-in command, call from path
 		else {
 			int rc = fork();
@@ -68,7 +71,7 @@ int main(int argc, char *argv[]) {
 			}
 			// child [DEBUG: parent]
 			else if (rc == 0) {
-				if ((execute(tokens, path) == -1)) {
+				if ((execute(tokens) == -1)) {
 					free_tokens(tokens);
 					err_routine(true);
 				}
@@ -82,62 +85,47 @@ int main(int argc, char *argv[]) {
 }
 
 
-void cmd_exit(char **tokens, char *line, size_t nargs) {
-	if (nargs > 1) {
-		err_routine(false);
-	} else {
-		free_tokens(tokens);
-		free(line);
-		exit(0);
-	}
-}
-
-
-void cmd_cd(char **tokens, size_t nargs) {
-	if (nargs != 2 || chdir(tokens[1]) < 0) {
-		err_routine(false);
-	}
-}
-
-
-void cmd_path(char ***pathp, char **tokens, size_t nargs) {
-	free_tokens(*pathp);
-	char **path = malloc(sizeof(char *) * nargs);
-	for (int i = 0; i < nargs - 1; ++i) { 
-		path[i] = strdup(tokens[i + 1]); 
-	}
-	path[nargs - 1] = NULL;
-	*pathp = path;
-}
-
 void err_routine(bool call_exit) {
+	// fprintf(stderr, "An error has occurred\n");
 	char error_message[30] = "An error has occurred\n";
 	write(STDERR_FILENO, error_message, strlen(error_message)); 
 	if (call_exit) exit(1);
 }
 
-
+// TODO loop over paths
 int execute(char **args, char **path) {
-	for (char **p = path; *p != NULL; ++p) {
-		char *prepended = prepend(args[0], *p, "/");
-		if (access(prepended, X_OK) == 0) {
-			// args must contain *p
+	for (char *p = path[0]; *p != NULL; ++p) {
+		char *prepended = prepend(path, args[0]);
+		if (access(prepended, X_OK)) {
+			// args must contain p
 			free(args[0]);
-			args[0] = prepended;
-			return execv(args[0], args);
+			args[0] = p;
 		}
-		free(prepended);
+	}
+	// prepend /bin/cmd
+	char *p = prepend(args[0], BIN);
+
+	// only try /usr/bin if /bin fails
+	if (access(p, X_OK) != 0) {
+		free(p);
+		p = prepend(args[0], USRBIN);
+		if (access(p, X_OK) != 0) {
+			free(p);
+			return -1;
+		}
 	}
 
-	return -1;
+	// args[0] must match p
+	free(args[0]);
+	args[0] = p;
+
+	return execv(p, args);
 }
 
 
-char *prepend(const char *restrict base, const char *restrict prefix,
-		const char *sep) {
-	char *s = malloc(strlen(prefix) + strlen(sep)+ strlen(base) + 1);
+char *prepend(const char *restrict base, const char *restrict prefix) {
+	char *s = malloc(strlen(prefix) + strlen(base) + 1);
 	strcpy(s, prefix);
-	strcat(s, sep);
 	strcat(s, base);
 
 	return s;
