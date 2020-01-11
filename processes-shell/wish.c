@@ -10,12 +10,13 @@
 #define CD "cd"
 #define DEFAULT_PATH "/bin"
 
-
+// TODO move to header file
 char *prepend(const char *restrict, const char *restrict, const char *);
-char *redirect(char **, size_t); 
-char **tokenize(const char *, const char *, const char *, size_t *);
+char *redirect(char **);
+char **get_next_args(char ***, size_t *);
+char **tokenize(const char *, const char *, const char *);
 FILE get_output(int *, const char **argv);
-int execute(char **, char **, size_t);
+int execute(char **, char **);
 size_t count_args(const char *, const char *, const char *); 
 void cmd_exit(char **, char *, size_t);
 void cmd_cd(char **, size_t);
@@ -32,30 +33,29 @@ int main(int argc, char *argv[]) {
 	const char *ops = ">&;";
 	// TODO move fp logic to function `get_output`
 	FILE *fp = stdin;
-	
+
 	// special case: batch mode
 	bool batch = false;
 	switch (argc) {
-	case 1:
-		break;
-	case 2:
-		batch = true;
-		break;
-	default:
-		err_routine(true); 
+		case 1:
+			break;
+		case 2:
+			batch = true;
+			break;
+		default:
+			err_routine(true); 
 	}
-		
+
 	if (batch) {
 		fp = fopen(argv[1], "r");
 		if (fp == NULL) {
 			err_routine(true);
 		}
 	}
-	
+
 	// initialize path
-	size_t nargs;
-	char **path = tokenize(DEFAULT_PATH, delims, ops, &nargs);
-	
+	char **path = tokenize(DEFAULT_PATH, delims, ops);
+
 	// run commands
 	char **tokens = malloc(0);
 	tokens[0] = NULL;
@@ -67,37 +67,40 @@ int main(int argc, char *argv[]) {
 			exit(0);
 		}	
 
-		tokens = tokenize(line, delims, ops, &nargs);
-		if (nargs == 0) continue;
-		char *cmd = tokens[0]; 
+		tokens = tokenize(line, delims, ops);
+		char **tokens_cpy = tokens;
+		char **args;
+		size_t nargs = 0;
+		while ((args = get_next_args(&tokens_cpy, &nargs)) != NULL) {
+			if (nargs == 0) continue;
+			char *cmd = args[0]; 
 
-		// first check for built-ins
-		if (strcmp(cmd, EXIT) == 0) {
-			cmd_exit(tokens, line, nargs);	
-		} else if (strcmp(cmd, CD) == 0) {
-			cmd_cd(tokens, nargs);
-		} else if (strcmp(cmd, PATH) == 0) {
-			cmd_path(&path, tokens, nargs);
-		}
-
-		// not a built-in command, call from path
-		else {
-			int rc = fork();
-			if (rc < 0) {
-				err_routine(true);
+			// first check for built-ins
+			if (strcmp(cmd, EXIT) == 0) {
+				cmd_exit(args, line, nargs);	
+			} else if (strcmp(cmd, CD) == 0) {
+				cmd_cd(args, nargs);
+			} else if (strcmp(cmd, PATH) == 0) {
+				cmd_path(&path, args, nargs);
 			}
-			// child [DEBUG: parent]
-			else if (rc == 0) {
-				if ((execute(tokens, path, nargs) == -1)) {
-					free_tokens(tokens);
+
+			// not a built-in command, call from path
+			else {
+				int rc = fork();
+				if (rc < 0) {
 					err_routine(true);
 				}
-			}
-			// parent
-			else {					
-				wait(NULL);
+				// child [DEBUG: parent]
+				else if (rc == 0) {
+					if ((execute(args, path) == -1)) {
+						free_tokens(tokens);
+						err_routine(true);
+					}
+				}
 			}
 		}
+		// parent: wait for ALL child processes
+		while (wait(NULL) > 0);
 	}
 }
 
@@ -138,10 +141,10 @@ void err_routine(bool call_exit) {
 }
 
 
-int execute(char **args, char **path, size_t nargs) {	
+int execute(char **args, char **path) {	
 	// handle redirection
 	char *out;
-	if ((out = redirect(args, nargs)) != NULL) {
+	if ((out = redirect(args)) != NULL) {
 		int fd = open(out, O_WRONLY | O_TRUNC | O_CREAT);
 		// redirect stdout in to file
 		if (fd < 0 || (fd = dup2(fd, STDOUT_FILENO) < 0 )) err_routine(true);
@@ -162,7 +165,41 @@ int execute(char **args, char **path, size_t nargs) {
 }
 
 
-char *redirect(char **args, size_t nargs) {
+char **get_next_args(char ***tokensp, size_t *nargs) {
+	if (**tokensp == NULL) {
+		return NULL;
+	}
+
+	// count args
+	char **start = *tokensp;
+	*nargs = 0;
+	for (char **stop = start; strcmp(*stop, "&") != 0; ++stop) {
+		*nargs += 1;
+		if (*(stop + 1) == NULL) break;			
+	}	
+	
+	// copy args	
+	char **args = malloc(sizeof(char *) * (*nargs + 1));
+	for (int i = 0; i < *nargs; ++i) {
+		args[i] = strdup(**tokensp);	
+		*tokensp += 1;
+	}
+	args[*nargs] = NULL;
+	
+	// advance tokens pointer past "&"
+	if (**tokensp != NULL) *tokensp += 1;
+	
+	return args;
+}
+
+
+char *redirect(char **args) {
+	// count number of args by locating NULL pointer
+	size_t nargs = 0;
+	for (char **p = args; *p != NULL; p++) {
+		nargs++;
+	}
+
 	// ensure '>' only allowed if at least two args, and only second to last
 	for (int i = 0; i < nargs; ++i) {
 		if (strcmp(args[i], ">") == 0 && (nargs < 3 || i != nargs - 2)) {
@@ -197,13 +234,12 @@ char *prepend(const char *restrict base, const char *restrict prefix,
 	return s;
 }
 
-char **tokenize(const char *line, const char *delims, const char *operators, 
-		size_t *nargs) {
+char **tokenize(const char *line, const char *delims, const char *operators) {
 
-	*nargs = count_args(line, delims, operators);	
+	size_t nargs = count_args(line, delims, operators);	
 
 	// tokenize args 
-	char **tokens = malloc(sizeof(char *) * (*nargs + 1));
+	char **tokens = malloc(sizeof(char *) * (nargs + 1));
 	int token_index = 0;
 	bool in_word = false;
 	const char *start = line;
@@ -272,7 +308,7 @@ size_t count_args(const char *line, const char *delims, const char *ops) {
 		nargs += 1;
 		p = strpbrk(p + 1, ops);
 	}
-	
+
 	return nargs;
 }
 
@@ -283,8 +319,4 @@ void free_tokens(char **tokens) {
 	}
 	free(tokens);
 }
-
-
-
-
 
